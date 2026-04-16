@@ -58,8 +58,7 @@ else
 fi
 
 echo "==> Creating VM disk (${DISK_GB}G)..."
-sudo cp "$DOWNLOAD_PATH" "$IMAGE_FILE"
-sudo qemu-img resize -f qcow2 "$IMAGE_FILE" ${DISK_GB}G
+sudo qemu-img create -f qcow2 -b "$DOWNLOAD_PATH" -F qcow2 "$IMAGE_FILE" ${DISK_GB}G
 
 # --- Cloud-init user-data ---
 cat > "${CLOUD_INIT_DIR}/meta-data" <<EOF
@@ -160,6 +159,10 @@ usermod -aG docker fpaoline
 echo "==> Installing Go..."
 retry 3 bash -c 'curl -sfL https://go.dev/dl/go1.24.10.linux-amd64.tar.gz | tar -C /usr/local -xzf -'
 
+echo "==> Tuning inotify limits..."
+sysctl -w fs.inotify.max_user_instances=512
+sysctl -w fs.inotify.max_user_watches=524288
+
 echo "==> Running user setup..."
 su - fpaoline -c 'bash /var/tmp/provision/user-setup.sh'
 
@@ -202,6 +205,9 @@ echo 'PROMPT="clauderunner: ${PROMPT}"' >> ~/.zshrc
 
 # Add claudio alias
 echo "alias claudio='claude --dangerously-skip-permissions'" >> ~/.zshrc
+
+# Reduce flicker in Claude Code output
+echo 'export CLAUDE_CODE_NO_FLICKER=1' >> ~/.zshrc
 
 # Claude Code settings - allow all tools for autonomous operation
 mkdir -p ~/.claude
@@ -263,6 +269,12 @@ npm install -g diffity
 
 # Claude Code (native binary)
 retry 3 bash -c 'curl -fsSL https://claude.ai/install.sh | sh'
+
+# Claude Code skills
+echo "==> Installing Claude Code skills..."
+retry 3 git clone https://github.com/fedepaol/skills.git /tmp/skills
+bash /tmp/skills/deploy.sh
+rm -rf /tmp/skills
 
 echo "==> User setup complete!"
 SETUP
