@@ -265,7 +265,7 @@ export PATH=$PATH:/usr/local/go/bin:~/go/bin
 retry 3 go install golang.org/x/tools/gopls@latest
 retry 3 go install golang.org/x/tools/cmd/goimports@latest
 pipx install specify-cli
-npm install -g diffity
+sudo npm install -g diffity
 
 # Claude Code (native binary)
 retry 3 bash -c 'curl -fsSL https://claude.ai/install.sh | sh'
