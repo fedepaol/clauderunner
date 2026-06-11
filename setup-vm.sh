@@ -6,10 +6,10 @@ VM_IP="${2:-192.168.122.50}"
 VM_USER="$(id -un)"
 VCPUS=4
 RAM_MB=8192
-DISK_GB=60
+DISK_GB=20
 FEDORA_VERSION=42
 IMAGE_URL="https://dl.fedoraproject.org/pub/fedora/linux/releases/${FEDORA_VERSION}/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-${FEDORA_VERSION}-1.1.x86_64.qcow2"
-IMAGE_DIR="/var/lib/libvirt/images"
+IMAGE_DIR="/home/libvirt/images"
 IMAGE_FILE="${IMAGE_DIR}/${VM_NAME}.qcow2"
 CLOUD_INIT_DIR="$(mktemp -d)"
 
@@ -153,11 +153,27 @@ retry 3 dnf install -y google-cloud-cli
 echo "==> Installing Docker CE..."
 dnf config-manager addrepo --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo || true
 retry 3 dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<'DOCKER_DAEMON'
+{
+  "features": {
+    "containerd-snapshotter": false
+  }
+}
+DOCKER_DAEMON
 systemctl enable --now docker
 usermod -aG docker fpaoline
 
 echo "==> Installing Go..."
 retry 3 bash -c 'curl -sfL https://go.dev/dl/go1.24.10.linux-amd64.tar.gz | tar -C /usr/local -xzf -'
+
+echo "==> Installing kubectl..."
+retry 3 bash -c 'curl -sfL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"'
+chmod +x /usr/local/bin/kubectl
+
+echo "==> Installing kind..."
+retry 3 bash -c 'curl -sfL -o /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64"'
+chmod +x /usr/local/bin/kind
 
 echo "==> Tuning inotify limits..."
 sysctl -w fs.inotify.max_user_instances=512
@@ -241,6 +257,17 @@ if [ -d /var/tmp/provision/gh ]; then
   cp -a /var/tmp/provision/gh/* ~/.config/gh/
 fi
 
+# GitHub signing key
+if [ -d /var/tmp/provision/ssh ]; then
+  cp /var/tmp/provision/ssh/github_signing_ed25519 ~/.ssh/
+  cp /var/tmp/provision/ssh/github_signing_ed25519.pub ~/.ssh/
+  chmod 600 ~/.ssh/github_signing_ed25519
+  chmod 644 ~/.ssh/github_signing_ed25519.pub
+  git config --global gpg.format ssh
+  git config --global user.signingkey ~/.ssh/github_signing_ed25519
+  git config --global commit.gpgsign true
+fi
+
 # Fix gitconfig excludesfile path
 sed -i "s|/home/fedepaol|/home/fpaoline|" ~/.gitconfig
 
@@ -270,6 +297,9 @@ sudo npm install -g diffity
 # Claude Code (native binary)
 retry 3 bash -c 'curl -fsSL https://claude.ai/install.sh | sh'
 
+# Caveman plugin
+retry 3 bash -c 'curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash'
+
 # Claude Code skills
 echo "==> Installing Claude Code skills..."
 retry 3 git clone https://github.com/fedepaol/skills.git /tmp/skills
@@ -295,6 +325,14 @@ fi
 if [ -d ~/.config/gh ]; then
   echo "==> Including gh credentials"
   cp -a ~/.config/gh "${CLOUD_INIT_DIR}/provision/gh"
+fi
+
+# GitHub signing key
+if [ -f ~/.ssh/github_signing_ed25519 ]; then
+  echo "==> Including GitHub signing key"
+  mkdir -p "${CLOUD_INIT_DIR}/provision/ssh"
+  cp ~/.ssh/github_signing_ed25519 "${CLOUD_INIT_DIR}/provision/ssh/"
+  cp ~/.ssh/github_signing_ed25519.pub "${CLOUD_INIT_DIR}/provision/ssh/"
 fi
 
 mkdir -p "${CLOUD_INIT_DIR}/provision/nvim/lua/config"
@@ -328,7 +366,8 @@ sudo genisoimage -output "$PROVISION_ISO" -volid PROVISION -joliet -rock \
   gitmessage="${CLOUD_INIT_DIR}/provision/gitmessage" \
   nvim/="${CLOUD_INIT_DIR}/provision/nvim/" \
   $([ -d "${CLOUD_INIT_DIR}/provision/gcloud" ] && echo "gcloud/=${CLOUD_INIT_DIR}/provision/gcloud/") \
-  $([ -d "${CLOUD_INIT_DIR}/provision/gh" ] && echo "gh/=${CLOUD_INIT_DIR}/provision/gh/")
+  $([ -d "${CLOUD_INIT_DIR}/provision/gh" ] && echo "gh/=${CLOUD_INIT_DIR}/provision/gh/") \
+  $([ -d "${CLOUD_INIT_DIR}/provision/ssh" ] && echo "ssh/=${CLOUD_INIT_DIR}/provision/ssh/")
 
 # --- Reserve a static DHCP lease on the libvirt network ---
 VM_MAC="52:54:00:cc:cc:01"
@@ -336,6 +375,10 @@ echo "==> Adding DHCP reservation ${VM_IP} -> ${VM_MAC}..."
 sudo virsh net-update default add ip-dhcp-host \
   "<host mac='${VM_MAC}' name='${VM_NAME}' ip='${VM_IP}'/>" \
   --live --config 2>/dev/null || echo "  (reservation may already exist)"
+
+# --- Fix SELinux labels so virt-install doesn't conflict with backing file ---
+echo "==> Fixing SELinux labels on disk images..."
+sudo restorecon -v "${IMAGE_FILE}" "${CLOUD_INIT_ISO}" "${PROVISION_ISO}" "$DOWNLOAD_PATH"
 
 # --- Create VM ---
 echo "==> Creating VM '${VM_NAME}'..."
