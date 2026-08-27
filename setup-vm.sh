@@ -7,8 +7,8 @@ VM_USER="$(id -un)"
 VCPUS=4
 RAM_MB=8192
 DISK_GB=20
-FEDORA_VERSION=42
-IMAGE_URL="https://dl.fedoraproject.org/pub/fedora/linux/releases/${FEDORA_VERSION}/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-${FEDORA_VERSION}-1.1.x86_64.qcow2"
+FEDORA_VERSION=44
+IMAGE_URL="https://dl.fedoraproject.org/pub/fedora/linux/releases/${FEDORA_VERSION}/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-${FEDORA_VERSION}-1.7.x86_64.qcow2"
 IMAGE_DIR="/home/libvirt/images"
 IMAGE_FILE="${IMAGE_DIR}/${VM_NAME}.qcow2"
 CLOUD_INIT_DIR="$(mktemp -d)"
@@ -179,6 +179,9 @@ echo "==> Tuning inotify limits..."
 sysctl -w fs.inotify.max_user_instances=512
 sysctl -w fs.inotify.max_user_watches=524288
 
+echo "==> Fixing provision dir permissions..."
+chown -R fpaoline:fpaoline /var/tmp/provision/
+
 echo "==> Running user setup..."
 su - fpaoline -c 'bash /var/tmp/provision/user-setup.sh'
 
@@ -225,7 +228,10 @@ echo "alias claudio='claude --dangerously-skip-permissions'" >> ~/.zshrc
 # Reduce flicker in Claude Code output
 echo 'export CLAUDE_CODE_NO_FLICKER=1' >> ~/.zshrc
 
-# Claude Code settings - allow all tools for autonomous operation
+# Set terminal for 256 color support
+echo 'export TERM=xterm-256color' >> ~/.zshrc
+
+# Claude Code settings
 mkdir -p ~/.claude
 cat > ~/.claude/settings.json <<'CLAUDE_SETTINGS'
 {
@@ -282,7 +288,6 @@ cp /var/tmp/provision/nvim/lua/commands.lua ~/.config/nvim/lua/commands.lua
 cp /var/tmp/provision/nvim/lua/config/lazy.lua ~/.config/nvim/lua/config/lazy.lua
 cp /var/tmp/provision/nvim/lua/plugins/all.lua ~/.config/nvim/lua/plugins/all.lua
 cp /var/tmp/provision/nvim/lua/plugins/gitsigns.lua ~/.config/nvim/lua/plugins/gitsigns.lua
-cp /var/tmp/provision/nvim/lua/plugins/lazygit.lua ~/.config/nvim/lua/plugins/lazygit.lua
 
 # Install nvim plugins
 nvim --headless "+Lazy! sync" +qa 2>/dev/null || true
@@ -335,6 +340,13 @@ if [ -f ~/.ssh/github_signing_ed25519 ]; then
   cp ~/.ssh/github_signing_ed25519.pub "${CLOUD_INIT_DIR}/provision/ssh/"
 fi
 
+# Claude settings
+if [ -f ~/.claude/settings.json ]; then
+  echo "==> Including Claude settings"
+  mkdir -p "${CLOUD_INIT_DIR}/provision/claude"
+  cp ~/.claude/settings.json "${CLOUD_INIT_DIR}/provision/claude/"
+fi
+
 mkdir -p "${CLOUD_INIT_DIR}/provision/nvim/lua/config"
 mkdir -p "${CLOUD_INIT_DIR}/provision/nvim/lua/plugins"
 cp ~/.config/nvim/init.lua "${CLOUD_INIT_DIR}/provision/nvim/init.lua"
@@ -346,7 +358,6 @@ cp ~/.config/nvim/lua/commands.lua "${CLOUD_INIT_DIR}/provision/nvim/lua/command
 cp ~/.config/nvim/lua/config/lazy.lua "${CLOUD_INIT_DIR}/provision/nvim/lua/config/lazy.lua"
 cp ~/.config/nvim/lua/plugins/all.lua "${CLOUD_INIT_DIR}/provision/nvim/lua/plugins/all.lua"
 cp ~/.config/nvim/lua/plugins/gitsigns.lua "${CLOUD_INIT_DIR}/provision/nvim/lua/plugins/gitsigns.lua"
-cp ~/.config/nvim/lua/plugins/lazygit.lua "${CLOUD_INIT_DIR}/provision/nvim/lua/plugins/lazygit.lua"
 
 # --- Create cloud-init ISO ---
 echo "==> Creating cloud-init ISO..."
@@ -367,7 +378,8 @@ sudo genisoimage -output "$PROVISION_ISO" -volid PROVISION -joliet -rock \
   nvim/="${CLOUD_INIT_DIR}/provision/nvim/" \
   $([ -d "${CLOUD_INIT_DIR}/provision/gcloud" ] && echo "gcloud/=${CLOUD_INIT_DIR}/provision/gcloud/") \
   $([ -d "${CLOUD_INIT_DIR}/provision/gh" ] && echo "gh/=${CLOUD_INIT_DIR}/provision/gh/") \
-  $([ -d "${CLOUD_INIT_DIR}/provision/ssh" ] && echo "ssh/=${CLOUD_INIT_DIR}/provision/ssh/")
+  $([ -d "${CLOUD_INIT_DIR}/provision/ssh" ] && echo "ssh/=${CLOUD_INIT_DIR}/provision/ssh/") \
+  $([ -d "${CLOUD_INIT_DIR}/provision/claude" ] && echo "claude/=${CLOUD_INIT_DIR}/provision/claude/")
 
 # --- Reserve a static DHCP lease on the libvirt network ---
 VM_MAC="52:54:00:cc:cc:01"
@@ -380,6 +392,14 @@ sudo virsh net-update default add ip-dhcp-host \
 echo "==> Fixing SELinux labels on disk images..."
 sudo restorecon -v "${IMAGE_FILE}" "${CLOUD_INIT_ISO}" "${PROVISION_ISO}" "$DOWNLOAD_PATH"
 
+# --- Resolve OS variant (osinfo-db may lag behind latest Fedora) ---
+OS_VARIANT="fedora${FEDORA_VERSION}"
+if ! osinfo-query os short-id="${OS_VARIANT}" &>/dev/null 2>&1; then
+  FALLBACK=$(osinfo-query os | grep -oP 'fedora\d+' | sort -V | tail -1)
+  OS_VARIANT="${FALLBACK:-fedora40}"
+  echo "==> Note: fedora${FEDORA_VERSION} not in osinfo-db, using ${OS_VARIANT}"
+fi
+
 # --- Create VM ---
 echo "==> Creating VM '${VM_NAME}'..."
 sudo virt-install \
@@ -389,7 +409,7 @@ sudo virt-install \
   --disk path="${IMAGE_FILE}",format=qcow2 \
   --disk path="${CLOUD_INIT_ISO}",device=cdrom \
   --disk path="${PROVISION_ISO}",device=cdrom \
-  --os-variant fedora${FEDORA_VERSION} \
+  --os-variant "${OS_VARIANT}" \
   --network network=default,mac="${VM_MAC}" \
   --graphics none \
   --console pty,target_type=serial \
