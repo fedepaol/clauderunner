@@ -124,7 +124,7 @@ done
 echo "==> Installing packages..."
 retry 5 dnf install -y --skip-unavailable \
   zsh neovim tmux git gcc make wget unzip \
-  nodejs npm ripgrep fd-find jq pipx
+  nodejs npm ripgrep fd-find jq
 
 echo "==> Installing lazygit from COPR..."
 dnf copr enable -y atim/lazygit
@@ -152,7 +152,7 @@ retry 3 dnf install -y google-cloud-cli
 
 echo "==> Installing Docker CE..."
 dnf config-manager addrepo --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo || true
-retry 3 dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+retry 3 dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin bubblewrap
 mkdir -p /etc/docker
 cat > /etc/docker/daemon.json <<'DOCKER_DAEMON'
 {
@@ -194,6 +194,7 @@ cat > "${CLOUD_INIT_DIR}/provision/user-setup.sh" <<'SETUP'
 #!/bin/bash
 set -euo pipefail
 export HOME=/home/fpaoline
+export PATH="$HOME/.local/bin:$PATH"
 cd ~
 
 retry() {
@@ -222,14 +223,21 @@ cp /var/tmp/provision/gitmessage ~/.gitmessage
 # Override prompt to show clauderunner:
 echo 'PROMPT="clauderunner: ${PROMPT}"' >> ~/.zshrc
 
+# OpenCode
+echo 'export PATH="$HOME/.opencode/bin:$PATH"' >> ~/.zshrc
+
 # Add claudio alias
 echo "alias claudio='claude --dangerously-skip-permissions'" >> ~/.zshrc
+echo "alias codexo='codex --yolo'" >> ~/.zshrc
 
 # Reduce flicker in Claude Code output
 echo 'export CLAUDE_CODE_NO_FLICKER=1' >> ~/.zshrc
 
 # Set terminal for 256 color support
 echo 'export TERM=xterm-256color' >> ~/.zshrc
+
+# GitHub token for tools that read GITHUB_TOKEN
+echo 'export GITHUB_TOKEN=$(gh auth token)' >> ~/.zshrc
 
 # Claude Code settings
 mkdir -p ~/.claude
@@ -262,6 +270,23 @@ if [ -d /var/tmp/provision/gh ]; then
   mkdir -p ~/.config/gh
   cp -a /var/tmp/provision/gh/* ~/.config/gh/
 fi
+
+# GitHub repositories
+gh repo clone fedepaol/openperouter ~/openperouter
+git -C ~/openperouter remote add upstream https://github.com/openperouter/openperouter.git 2>/dev/null || true
+(
+  cd ~/openperouter
+  gh repo set-default upstream
+  codegraph init
+)
+
+gh repo clone fedepaol/metallb ~/metallb
+git -C ~/metallb remote add upstream https://github.com/metallb/metallb.git 2>/dev/null || true
+(
+  cd ~/metallb
+  gh repo set-default upstream
+  codegraph init
+)
 
 # GitHub signing key
 if [ -d /var/tmp/provision/ssh ]; then
@@ -296,14 +321,50 @@ nvim --headless "+Lazy! sync" +qa 2>/dev/null || true
 export PATH=$PATH:/usr/local/go/bin:~/go/bin
 retry 3 go install golang.org/x/tools/gopls@latest
 retry 3 go install golang.org/x/tools/cmd/goimports@latest
-pipx install specify-cli
+retry 3 bash -c 'set -o pipefail; curl -LsSf https://astral.sh/uv/install.sh | sh'
+retry 3 uv tool install specify-cli
 sudo npm install -g diffity
 
 # Claude Code (native binary)
 retry 3 bash -c 'curl -fsSL https://claude.ai/install.sh | sh'
 
-# Caveman plugin
-retry 3 bash -c 'curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash'
+# Codex CLI (native binary)
+retry 3 bash -c 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
+
+# OpenCode CLI
+retry 3 bash -c 'curl -fsSL https://opencode.ai/install | bash'
+
+# GitHub Copilot CLI. Requires Node.js 22 or newer.
+retry 3 sudo npm install -g @github/copilot
+
+# Codex credentials. Copy only auth state; never copy host session history.
+if [ -f /var/tmp/provision/codex/auth.json ]; then
+  mkdir -p ~/.codex
+  install -m 600 /var/tmp/provision/codex/auth.json ~/.codex/auth.json
+fi
+
+# Caveman for Claude Code, Codex CLI, and GitHub Copilot.
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v2.4.0/install.sh | bash
+
+# Make Caveman ultra mode default for all three tools.
+mkdir -p ~/.config/caveman ~/.copilot
+cat > ~/.config/caveman/config.json <<'CAVEMAN_CONFIG'
+{
+  "defaultMode": "ultra"
+}
+CAVEMAN_CONFIG
+
+cat > ~/.codex/AGENTS.md <<'CODEX_AGENTS'
+Use the `caveman` skill in `ultra` mode for every session unless the user requests another mode.
+CODEX_AGENTS
+
+cat > ~/.copilot/copilot-instructions.md <<'COPILOT_INSTRUCTIONS'
+Use the installed Caveman skill in `ultra` mode for every session unless the user requests another mode.
+COPILOT_INSTRUCTIONS
+
+# CodeGraph CLI and agent setup. Run after agent instructions exist so setup preserves them.
+retry 3 bash -c 'curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh'
+retry 3 codegraph install --yes
 
 # Claude Code skills
 echo "==> Installing Claude Code skills..."
@@ -347,6 +408,14 @@ if [ -f ~/.claude/settings.json ]; then
   cp ~/.claude/settings.json "${CLOUD_INIT_DIR}/provision/claude/"
 fi
 
+# Codex credentials (if authenticated on host). auth.json contains login tokens;
+# deliberately exclude config, history, databases, and session files.
+if [ -f ~/.codex/auth.json ]; then
+  echo "==> Including Codex credentials"
+  mkdir -p "${CLOUD_INIT_DIR}/provision/codex"
+  cp ~/.codex/auth.json "${CLOUD_INIT_DIR}/provision/codex/auth.json"
+fi
+
 mkdir -p "${CLOUD_INIT_DIR}/provision/nvim/lua/config"
 mkdir -p "${CLOUD_INIT_DIR}/provision/nvim/lua/plugins"
 cp ~/.config/nvim/init.lua "${CLOUD_INIT_DIR}/provision/nvim/init.lua"
@@ -379,7 +448,8 @@ sudo genisoimage -output "$PROVISION_ISO" -volid PROVISION -joliet -rock \
   $([ -d "${CLOUD_INIT_DIR}/provision/gcloud" ] && echo "gcloud/=${CLOUD_INIT_DIR}/provision/gcloud/") \
   $([ -d "${CLOUD_INIT_DIR}/provision/gh" ] && echo "gh/=${CLOUD_INIT_DIR}/provision/gh/") \
   $([ -d "${CLOUD_INIT_DIR}/provision/ssh" ] && echo "ssh/=${CLOUD_INIT_DIR}/provision/ssh/") \
-  $([ -d "${CLOUD_INIT_DIR}/provision/claude" ] && echo "claude/=${CLOUD_INIT_DIR}/provision/claude/")
+  $([ -d "${CLOUD_INIT_DIR}/provision/claude" ] && echo "claude/=${CLOUD_INIT_DIR}/provision/claude/") \
+  $([ -d "${CLOUD_INIT_DIR}/provision/codex" ] && echo "codex/=${CLOUD_INIT_DIR}/provision/codex/")
 
 # --- Reserve a static DHCP lease on the libvirt network ---
 VM_MAC="52:54:00:cc:cc:01"
