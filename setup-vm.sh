@@ -319,7 +319,6 @@ cp /var/tmp/provision/nvim/lua/autocommands.lua ~/.config/nvim/lua/autocommands.
 cp /var/tmp/provision/nvim/lua/commands.lua ~/.config/nvim/lua/commands.lua
 cp /var/tmp/provision/nvim/lua/config/lazy.lua ~/.config/nvim/lua/config/lazy.lua
 cp /var/tmp/provision/nvim/lua/plugins/all.lua ~/.config/nvim/lua/plugins/all.lua
-cp /var/tmp/provision/nvim/lua/plugins/gitsigns.lua ~/.config/nvim/lua/plugins/gitsigns.lua
 
 # Install nvim plugins
 nvim --headless "+Lazy! sync" +qa 2>/dev/null || true
@@ -437,7 +436,6 @@ cp ~/.config/nvim/lua/autocommands.lua "${CLOUD_INIT_DIR}/provision/nvim/lua/aut
 cp ~/.config/nvim/lua/commands.lua "${CLOUD_INIT_DIR}/provision/nvim/lua/commands.lua"
 cp ~/.config/nvim/lua/config/lazy.lua "${CLOUD_INIT_DIR}/provision/nvim/lua/config/lazy.lua"
 cp ~/.config/nvim/lua/plugins/all.lua "${CLOUD_INIT_DIR}/provision/nvim/lua/plugins/all.lua"
-cp ~/.config/nvim/lua/plugins/gitsigns.lua "${CLOUD_INIT_DIR}/provision/nvim/lua/plugins/gitsigns.lua"
 
 # --- Create cloud-init ISO ---
 echo "==> Creating cloud-init ISO..."
