@@ -219,6 +219,9 @@ retry 3 bash -c 'sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/o
 cp /var/tmp/provision/zshrc ~/.zshrc
 cp /var/tmp/provision/gitconfig ~/.gitconfig
 cp /var/tmp/provision/gitmessage ~/.gitmessage
+if [ -f /var/tmp/provision/env ]; then
+  install -m 600 /var/tmp/provision/env ~/.env
+fi
 
 # Override prompt to show clauderunner:
 echo 'PROMPT="clauderunner: ${PROMPT}"' >> ~/.zshrc
@@ -228,7 +231,6 @@ echo 'export PATH="$HOME/.opencode/bin:$PATH"' >> ~/.zshrc
 
 # Add claudio alias
 echo "alias claudio='claude --dangerously-skip-permissions'" >> ~/.zshrc
-echo "alias codexo='codex --yolo'" >> ~/.zshrc
 
 # Reduce flicker in Claude Code output
 echo 'export CLAUDE_CODE_NO_FLICKER=1' >> ~/.zshrc
@@ -270,6 +272,11 @@ if [ -d /var/tmp/provision/gh ]; then
   mkdir -p ~/.config/gh
   cp -a /var/tmp/provision/gh/* ~/.config/gh/
 fi
+
+
+# CodeGraph CLI and agent setup. Run after agent instructions exist so setup preserves them.
+retry 3 bash -c 'curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh'
+retry 3 codegraph install --yes
 
 # GitHub repositories
 gh repo clone fedepaol/openperouter ~/openperouter
@@ -337,10 +344,13 @@ retry 3 bash -c 'curl -fsSL https://opencode.ai/install | bash'
 # GitHub Copilot CLI. Requires Node.js 22 or newer.
 retry 3 sudo npm install -g @github/copilot
 
-# Codex credentials. Copy only auth state; never copy host session history.
-if [ -f /var/tmp/provision/codex/auth.json ]; then
+# Codex credentials, settings, and profiles. Exclude host session history.
+if [ -d /var/tmp/provision/codex ]; then
   mkdir -p ~/.codex
-  install -m 600 /var/tmp/provision/codex/auth.json ~/.codex/auth.json
+  for config in /var/tmp/provision/codex/*; do
+    [ -f "$config" ] || continue
+    install -m 600 "$config" ~/.codex/
+  done
 fi
 
 # Caveman for Claude Code, Codex CLI, and GitHub Copilot.
@@ -362,9 +372,6 @@ cat > ~/.copilot/copilot-instructions.md <<'COPILOT_INSTRUCTIONS'
 Use the installed Caveman skill in `ultra` mode for every session unless the user requests another mode.
 COPILOT_INSTRUCTIONS
 
-# CodeGraph CLI and agent setup. Run after agent instructions exist so setup preserves them.
-retry 3 bash -c 'curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh'
-retry 3 codegraph install --yes
 
 # Claude Code skills
 echo "==> Installing Claude Code skills..."
@@ -380,6 +387,9 @@ sed -i "s/fpaoline/${VM_USER}/g" "${CLOUD_INIT_DIR}/provision/user-setup.sh"
 cp ~/.zshrc "${CLOUD_INIT_DIR}/provision/zshrc"
 cp ~/.gitconfig "${CLOUD_INIT_DIR}/provision/gitconfig"
 cp ~/.gitmessage "${CLOUD_INIT_DIR}/provision/gitmessage"
+if [ -f ~/.env ]; then
+  install -m 600 ~/.env "${CLOUD_INIT_DIR}/provision/env"
+fi
 
 # gcloud credentials (if authenticated on host)
 if [ -d ~/.config/gcloud ]; then
@@ -408,13 +418,14 @@ if [ -f ~/.claude/settings.json ]; then
   cp ~/.claude/settings.json "${CLOUD_INIT_DIR}/provision/claude/"
 fi
 
-# Codex credentials (if authenticated on host). auth.json contains login tokens;
-# deliberately exclude config, history, databases, and session files.
-if [ -f ~/.codex/auth.json ]; then
-  echo "==> Including Codex credentials"
+# Copy only Codex authentication, settings, and profile configs, without history
+# or session databases. Profiles may live in config.toml or *.config.toml.
+for config in ~/.codex/auth.json ~/.codex/config.toml ~/.codex/*.config.toml; do
+  [ -f "$config" ] || continue
+  echo "==> Including Codex $(basename "$config")"
   mkdir -p "${CLOUD_INIT_DIR}/provision/codex"
-  cp ~/.codex/auth.json "${CLOUD_INIT_DIR}/provision/codex/auth.json"
-fi
+  install -m 600 "$config" "${CLOUD_INIT_DIR}/provision/codex/"
+done
 
 mkdir -p "${CLOUD_INIT_DIR}/provision/nvim/lua/config"
 mkdir -p "${CLOUD_INIT_DIR}/provision/nvim/lua/plugins"
@@ -445,6 +456,7 @@ sudo genisoimage -output "$PROVISION_ISO" -volid PROVISION -joliet -rock \
   gitconfig="${CLOUD_INIT_DIR}/provision/gitconfig" \
   gitmessage="${CLOUD_INIT_DIR}/provision/gitmessage" \
   nvim/="${CLOUD_INIT_DIR}/provision/nvim/" \
+  $([ -f "${CLOUD_INIT_DIR}/provision/env" ] && echo "env=${CLOUD_INIT_DIR}/provision/env") \
   $([ -d "${CLOUD_INIT_DIR}/provision/gcloud" ] && echo "gcloud/=${CLOUD_INIT_DIR}/provision/gcloud/") \
   $([ -d "${CLOUD_INIT_DIR}/provision/gh" ] && echo "gh/=${CLOUD_INIT_DIR}/provision/gh/") \
   $([ -d "${CLOUD_INIT_DIR}/provision/ssh" ] && echo "ssh/=${CLOUD_INIT_DIR}/provision/ssh/") \

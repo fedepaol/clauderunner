@@ -1,14 +1,15 @@
 # clauderunner
 
-Provisions a disposable Fedora VM (via libvirt/KVM) pre-configured for autonomous Claude Code usage.
+Provisions a disposable Fedora VM (via libvirt/KVM) pre-configured for autonomous CLI agent usage.
 
-The VM comes with: Go, Docker, GitHub CLI, Google Cloud CLI, Neovim, zsh, [diffity](https://github.com/kamranahmedse/diffity), and Claude Code with `--dangerously-skip-permissions` aliased as `claudio`.
+The VM comes with: Go, Docker, GitHub CLI, GitHub Copilot CLI, Google Cloud CLI, Neovim, zsh, [diffity](https://github.com/kamranahmedse/diffity), Claude Code with `--dangerously-skip-permissions` aliased as `claudio`, and Codex CLI. Caveman installs for Claude, Codex, and Copilot and defaults to `ultra` mode.
 
 ## Prerequisites
 
 - A Linux host with libvirt, QEMU/KVM, and `virt-install`
 - SSH public key in `~/.ssh/`
 - (Optional) `gh` and `gcloud` credentials in `~/.config/` — they'll be copied into the VM
+- (Optional) Host `~/.env` and Codex authentication, settings, and profiles (`~/.codex/auth.json`, `config.toml`, and `*.config.toml`) are copied; host session history stays on host. Codex aliases come from the copied `~/.zshrc`.
 
 ## Usage
 
